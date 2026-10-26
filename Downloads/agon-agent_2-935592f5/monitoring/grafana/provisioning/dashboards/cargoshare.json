@@ -1,0 +1,20 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 0,
+  "schemaVersion": 39,
+  "tags": ["cargoshare"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "CargoShare — Platform Health",
+  "uid": "cargoshare-health",
+  "version": 1,
+  "refresh": "15s",
+  "panels": [
+    { "id": 1, "type": "timeseries", "title": "HTTP request rate (req/s)", "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 }, "targets": [ { "expr": "sum(rate(http_request_duration_seconds_count[1m])) by (route)", "legendFormat": "{{route}}" } ] },
+    { "id": 2, "type": "timeseries", "title": "p95 latency (ms)", "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 }, "targets": [ { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route)) * 1000", "legendFormat": "{{route}}" } ] },
+    { "id": 3, "type": "stat", "title": "Booking locks acquired", "gridPos": { "x": 0, "y": 8, "w": 6, "h": 6 }, "targets": [ { "expr": "booking_locks_acquired_total" } ] },
+    { "id": 4, "type": "stat", "title": "Bookings confirmed", "gridPos": { "x": 6, "y": 8, "w": 6, "h": 6 }, "targets": [ { "expr": "bookings_confirmed_total" } ] },
+    { "id": 5, "type": "timeseries", "title": "Payment success vs failure", "gridPos": { "x": 12, "y": 8, "w": 12, "h": 6 }, "targets": [ { "expr": "rate(payments_total{status=\"captured\"}[5m])", "legendFormat": "captured" }, { "expr": "rate(payments_total{status=\"failed\"}[5m])", "legendFormat": "failed" } ] }
+  ]
+}

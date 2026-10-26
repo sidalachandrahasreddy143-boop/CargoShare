@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cargoshare
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cargoshare-config
+  namespace: cargoshare
+data:
+  NODE_ENV: production
+  PORT: "4000"
+  MINIO_ENDPOINT: cargoshare-minio
+  MINIO_PORT: "9000"
+  MINIO_USE_SSL: "false"
+  CORS_ORIGIN: https://cargoshare.example.com
+---
+# Create secrets first:
+# kubectl -n cargoshare create secret generic cargoshare-secrets \
+#   --from-literal=DATABASE_URL=postgres://... \
+#   --from-literal=REDIS_URL=redis://... \
+#   --from-literal=JWT_SECRET=... \
+#   --from-literal=RAZORPAY_KEY_ID=... --from-literal=RAZORPAY_KEY_SECRET=... \
+#   --from-literal=MINIO_ACCESS_KEY=... --from-literal=MINIO_SECRET_KEY=...

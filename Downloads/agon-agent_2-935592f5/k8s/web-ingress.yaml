@@ -1,0 +1,89 @@
+# Web frontend
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: cargoshare
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: web }
+  template:
+    metadata:
+      labels: { app: web }
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/cargoshare/web:latest
+          ports: [{ containerPort: 80 }]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cargoshare-web
+  namespace: cargoshare
+spec:
+  selector: { app: web }
+  ports: [{ port: 80, targetPort: 80 }]
+---
+# Ingress with cert-manager (Let's Encrypt) — TLS terminated at the edge
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cargoshare-ingress
+  namespace: cargoshare
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/websocket-services: cargoshare-api
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [cargoshare.example.com]
+      secretName: cargoshare-tls
+  rules:
+    - host: cargoshare.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend: { service: { name: cargoshare-api, port: { number: 4000 } } }
+          - path: /socket.io
+            pathType: Prefix
+            backend: { service: { name: cargoshare-api, port: { number: 4000 } } }
+          - path: /metrics
+            pathType: Prefix
+            backend: { service: { name: cargoshare-api, port: { number: 4000 } } }
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: cargoshare-web, port: { number: 80 } } }
+---
+# NetworkPolicy — default-deny inside namespace, allow listed traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: cargoshare
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-internal
+  namespace: cargoshare
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: cargoshare } }
+    - from: # ingress-nginx + prometheus
+        - namespaceSelector: {}
+      ports:
+        - { port: 80, protocol: TCP }
+        - { port: 4000, protocol: TCP }

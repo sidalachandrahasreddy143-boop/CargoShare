@@ -1,0 +1,144 @@
+# Backend API — Express + Socket.io
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: cargoshare
+  labels: { app: api }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: api }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels: { app: api }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4000"
+        prometheus.io/path: /metrics
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/cargoshare/api:latest
+          ports: [{ name: http, containerPort: 4000 }]
+          envFrom:
+            - configMapRef: { name: cargoshare-config }
+            - secretRef: { name: cargoshare-secrets }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          readinessProbe:
+            httpGet: { path: /api/health, port: 4000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/health, port: 4000 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cargoshare-api
+  namespace: cargoshare
+spec:
+  selector: { app: api }
+  ports:
+    - { name: http, port: 4000, targetPort: http }
+---
+# PostgreSQL (in-cluster for small deployments; use managed/CrunchyData operator at scale)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: cargoshare
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: postgres }
+  template:
+    metadata:
+      labels: { app: postgres }
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports: [{ containerPort: 5432 }]
+          env:
+            - { name: POSTGRES_USER, value: cargoshare }
+            - name: POSTGRES_DB, value: cargoshare
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: cargoshare-secrets, key: POSTGRES_PASSWORD } }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+          readinessProbe:
+            exec: { command: [pg_isready, -U, cargoshare] }
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: postgres-data }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: cargoshare
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 20Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cargoshare-postgres
+  namespace: cargoshare
+spec:
+  selector: { app: postgres }
+  ports: [{ port: 5432, targetPort: 5432 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: cargoshare
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          args: ["--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+          ports: [{ containerPort: 6379 }]
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: redis-data }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: cargoshare
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cargoshare-redis
+  namespace: cargoshare
+spec:
+  selector: { app: redis }
+  ports: [{ port: 6379, targetPort: 6379 }]

@@ -1,0 +1,31 @@
+{
+  "name": "cargoshare-api",
+  "version": "1.0.0",
+  "description": "CargoShare REST + Socket.io API — Node.js/Express, PostgreSQL, Redis, MinIO",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "migrate": "psql \"$DATABASE_URL\" -f sql/migrations/001_init.sql && psql \"$DATABASE_URL\" -f sql/migrations/002_seed.sql",
+    "hash": "node -e \"const b=require('bcryptjs');console.log(b.hashSync(process.argv[1],10))\" --"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.4.1",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "minio": "^8.0.0",
+    "multer": "^1.4.5-lts.1",
+    "pdfkit": "^0.15.1",
+    "pg": "^8.13.1",
+    "prom-client": "^15.1.3",
+    "razorpay": "^2.9.5",
+    "ioredis": "^5.4.1",
+    "socket.io": "^4.8.1",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1"
+  }
+}

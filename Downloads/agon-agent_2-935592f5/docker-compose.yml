@@ -1,0 +1,194 @@
+name: cargoshare
+
+# CargoShare — 100% open-source stack for local development.
+# Usage:  cp .env.example .env && docker compose up --build
+# Services: web (React, :8080), backend (Express + Socket.io, :4000),
+#           PostgreSQL (:5432), Redis (:6379), MinIO (:9000/:9001),
+#           Nginx reverse proxy (:80), Prometheus (:9090), Grafana (:3001)
+
+networks:
+  cargoshare:
+    driver: bridge
+
+volumes:
+  db_data:
+  redis_data:
+  minio_data:
+  prometheus_data:
+  grafana_data:
+
+services:
+  # ---------------------------------------------------------- PostgreSQL
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cargoshare}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cargoshare_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-cargoshare}
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      # Auto-applies migrations on first boot (empty volume only)
+      - ./server/sql/migrations:/docker-entrypoint-initdb.d:ro
+    networks: [cargoshare]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # -------------------------------------------------------------- Redis
+  # Used for booking locks (SETNX), hot container lists, Socket.io pub/sub
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks: [cargoshare]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # -------------------------------------------------------------- MinIO
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-cargoshare}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-cargoshare_dev_minio}
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    volumes:
+      - minio_data:/data
+    networks: [cargoshare]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      until /usr/bin/mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD}; do sleep 2; done;
+      /usr/bin/mc mb --ignore-existing local/cargoshare-docs;
+      /usr/bin/mc mb --ignore-existing local/cargoshare-invoices;
+      /usr/bin/mc mb --ignore-existing local/cargoshare-chat;
+      echo '[minio-init] buckets ready';
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-cargoshare}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-cargoshare_dev_minio}
+    networks: [cargoshare]
+
+  # ------------------------------------------------------------ Backend
+  backend:
+    build: ./server
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgres://${POSTGRES_USER:-cargoshare}:${POSTGRES_PASSWORD:-cargoshare_dev_password}@db:5432/${POSTGRES_DB:-cargoshare}
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: "9000"
+      MINIO_USE_SSL: "false"
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    networks: [cargoshare]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  # ---------------------------------------------------------------- Web
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:4000
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_started
+    networks: [cargoshare]
+
+  # -------------------------------------------------------------- Nginx
+  # Dev: plain HTTP reverse proxy. Prod: see nginx/prod.conf + certbot service.
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - web
+      - backend
+    networks: [cargoshare]
+
+  # ---------------------------------------------------------- Certbot SSL
+  certbot:
+    image: certbot/certbot:latest
+    profiles: ["prod"]
+    volumes:
+      - ./certbot/www:/var/www/certbot
+      - ./certbot/conf:/etc/letsencrypt
+    entrypoint: ["/bin/sh", "-c", "trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;"]
+
+  # ---------------------------------------------------------- Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    depends_on:
+      - backend
+    networks: [cargoshare]
+
+  # ------------------------------------------------------------- Grafana
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-cargoshare-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks: [cargoshare]
